@@ -97,7 +97,7 @@ class ScalpingBot:
                 self.log_message(f"📊 New cycle started at {datetime.now()}")
                 self.log_message(f"📈 Current budget per pair: {self.pair_budgets}")
                 for pair in self.config["PAIRS"]:
-                    current_price = TradingUtils.fetch_current_price(self.bitvavo, pair)
+                    current_price = trading_utils.fetch_current_price(pair)
                     rsi = TradingUtils.calculate_rsi(self.price_history[pair], self.config["WINDOW_SIZE"])
 
                     if rsi is not None:
@@ -170,10 +170,14 @@ if __name__ == "__main__":
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-    config = ConfigLoader.load_config(config_path)
-    logger = LoggingFacility(ConfigLoader.load_config("slack.json"))
-    state_managers = {pair: StateManager(pair, logger) for pair in config["PAIRS"]}
     bitvavo = initialize_bitvavo(ConfigLoader.load_config("bitvavo.json"))
+    config = ConfigLoader.load_config(config_path)
+    logger = LoggingFacility(config, args.bot_name)
+    trading_utils = TradingUtils(bitvavo, logger)
+    state_managers = {
+        pair: StateManager(pair, logger, trading_utils) for pair in config["PAIRS"]
+    }
+    
 
     bot = ScalpingBot(config, logger, state_managers, bitvavo, args)
     bot.run()

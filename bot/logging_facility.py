@@ -2,24 +2,31 @@ import logging
 import os
 from bot.slack_notifier import SlackNotifier
 
+
 class LoggingFacility:
     """
     A centralized logging facility for both console and Slack logging.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, bot_name: str):
         """
         Initializes the logging facility.
 
         Args:
             config (dict): Configuration for Slack webhook and logging options.
+            bot_name (str): Unique name for the bot to prefix log messages.
         """
+        self.bot_name = bot_name
+
+        # Console logging setup
         self.console_logger = logging.getLogger("console")
         self.console_logger.setLevel(logging.INFO)
         console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+        console_handler.setFormatter(logging.Formatter(
+            f"%(asctime)s - [{self.bot_name}] %(message)s"))
         self.console_logger.addHandler(console_handler)
 
+        # Slack notifier setup
         self.slack_notifier = SlackNotifier(config.get("SLACK_WEBHOOK_URL"))
         self.slack_results_only = config.get("SLACK_RESULTS_ONLY", True)
 
@@ -42,7 +49,7 @@ class LoggingFacility:
         """
         if results_only and not self.slack_results_only:
             return
-        self.slack_notifier.send_message(message)
+        self.slack_notifier.send_message(f"[{self.bot_name}] {message}")
 
     def log(self, message: str, to_console: bool = True, to_slack: bool = False, results_only: bool = False):
         """
