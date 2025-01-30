@@ -28,7 +28,7 @@ fi
 echo "🚀 Starting Docker container '${IMAGE}:${TAG}' with config '${CONFIG}'..."
 
 # Create Docker volume
-VOLUME_NAME="${IMAGE}_volume"
+VOLUME_NAME="${IMAGE}_${CONFIG}_volume"
 echo "🔄 Creating Docker volume '${VOLUME_NAME}' (if not exists)..."
 docker volume create "${VOLUME_NAME}" || handle_error "Failed to create Docker volume '${VOLUME_NAME}'."
 
