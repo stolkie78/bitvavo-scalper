@@ -26,9 +26,20 @@ class TradingUtils:
 
 
     @staticmethod
-    def place_order(bitvavo, pair, side, quantity, demo_mode=False):
+    def place_order(bitvavo, pair, side, quantity, use_amountQuote=False, demo_mode=False):
         """
-        Plaats een market order en log de API-aanroep voor debugging.
+        Plaatst een market order en logt de API-aanroep voor debugging.
+        
+        Args:
+            bitvavo (Bitvavo): Geïnitialiseerde Bitvavo API-client.
+            pair (str): Trading pair, bv. "ETH-EUR".
+            side (str): "buy" of "sell".
+            quantity (float): De hoeveelheid die gekocht of verkocht wordt.
+            use_amountQuote (bool): Gebruik amountQuote voor buy orders (standaard: False).
+            demo_mode (bool): Simuleer de order in demo-modus (standaard: False).
+
+        Returns:
+            dict: Respons van de Bitvavo API of een gesimuleerde order.
         """
         if demo_mode:
             return {
@@ -38,30 +49,37 @@ class TradingUtils:
                 "quantity": quantity,
                 "fills": [{"price": "0.0", "amount": str(quantity), "fee": "0.0"}]
             }
-    
+
         try:
-            # ✅ Correcte API parameters gebruiken
+            # ✅ Correcte API parameters
             order_params = {
                 "market": pair,
                 "side": side,
                 "orderType": "market",
             }
-    
+
             if side == "buy":
-                order_params["amount"] = str(quantity)  # ✅ Bitvavo verwacht 'amount' voor een market buy
+                if use_amountQuote:
+                    order_params["amountQuote"] = str(
+                        quantity)  # ✅ Koop X EUR aan ADA
+                else:
+                    order_params["amount"] = str(quantity)  # ✅ Koop X ADA
             else:
-                order_params["size"] = str(quantity)  # ✅ Bitvavo verwacht 'size' voor een market sell
-    
-            # 🔍 **Debug Log**: Controleer welke parameters worden doorgestuurd naar Bitvavo
-            print(f"📡 Sending order to Bitvavo: {json.dumps(order_params, indent=2)}")
-    
-            order_response = bitvavo.placeOrder(**order_params)
-    
+                order_params["amount"] = str(quantity)  # ✅ Verkoop X ADA
+
+            # 🔍 **Debug Log**: Controleer de API-aanroep
+            print(f"📡 Sending order to Bitvavo: {
+                  json.dumps(order_params, indent=2)}")
+
+            # ✅ Bitvavo API-aanroep
+            order_response = bitvavo.placeOrder(
+                pair, side, "market", order_params)
+
             # ✅ Controleer of de order succesvol is
             if "orderId" in order_response and "fills" in order_response and order_response["fills"]:
                 actual_price = float(order_response["fills"][0]["price"])
                 fee_paid = float(order_response["fills"][0]["fee"])
-    
+
                 return {
                     "status": "filled",
                     "orderId": order_response["orderId"],
@@ -73,10 +91,9 @@ class TradingUtils:
                 }
             else:
                 return {"status": "failed", "error": "No fills received", "pair": pair}
-    
+
         except Exception as e:
             return {"status": "error", "error": str(e), "pair": pair}
-
 
     @staticmethod
     def get_order_details(bitvavo, pair, action):
