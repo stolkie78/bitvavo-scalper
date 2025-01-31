@@ -100,43 +100,72 @@ class StateManager:
                 f"[{self.bot_name}] 👽❌ Cannot open a new position for {self.pair}. Position already exists.", to_console=True)
             return
 
-        # 🔹 Plaats kooporder en haal de daadwerkelijke koopprijs en fee op
-        order = TradingUtils.place_order(
-            self.bitvavo, self.pair, "buy", budget, demo_mode=self.demo_mode)
+        order_response = None  # ✅ Voeg standaardwaarde toe
 
-        if order.get("status") == "filled":  # ✅ Controleer of de order volledig is uitgevoerd
-            # ✅ Werkelijke koopprijs per eenheid
-            real_buy_price = order["actual_price"]
-            buy_fee = order["fee_paid"]  # ✅ Werkelijke fee
-            quantity = order["quantity_bought"]  # ✅ Hoeveelheid gekocht na fee
-
-            if quantity <= 0:
+        try:
+            # ✅ **Zorg ervoor dat het budget voldoet aan de minimale ordergrootte**
+            adjusted_budget = self.adjust_quantity(self.pair, budget)
+            if adjusted_budget <= 0:
                 self.logger.log(
-                    f"[{self.bot_name}] 👽❌ Invalid quantity for {self.pair} after fees: {quantity}", to_console=True, to_slack=False)
+                    f"[{self.bot_name}] ⚠️ Adjusted budget for {
+                        self.pair} is too low: {adjusted_budget}. Order canceled.",
+                    to_console=True
+                )
                 return
 
-            # ✅ Opslaan van de nieuwe positie in de portfolio
-            new_position = {
-                "price": real_buy_price,
-                "quantity": quantity,
-                "timestamp": datetime.now().isoformat()
-            }
+            # 🔹 Plaats de marktorder
+            order_response = TradingUtils.place_order(
+                self.bitvavo, self.pair, "buy", adjusted_budget, demo_mode=self.demo_mode
+            )
 
-            self.portfolio[self.pair] = new_position
-            self.save_portfolio()
-
-            # ✅ Log de koop inclusief echte fees
-            self.log_trade("buy", real_buy_price, quantity, fee=buy_fee)
-
+            # ✅ **Extra logging van de API response**
             self.logger.log(
-                f"[{self.bot_name}] 👽 Bought {self.pair}: Price={real_buy_price:.2f}, Quantity={
-                    quantity:.6f}, Fee={buy_fee:.2f}",
+                f"[{self.bot_name}] 🔍 Order Response: {
+                    json.dumps(order_response, indent=4)}",
                 to_console=True
             )
-        else:
-            self.logger.log(
-                f"[{self.bot_name}] 👽 Failed to execute buy order for {self.pair}: {order}", to_console=True, to_slack=False)
 
+            if order_response.get("status") == "filled":  # ✅ Order is succesvol gevuld
+                real_buy_price = order_response["actual_price"]
+                buy_fee = order_response["fee_paid"]
+                quantity = order_response["quantity"]
+
+                if quantity <= 0:
+                    self.logger.log(
+                        f"[{self.bot_name}] 👽❌ Invalid quantity for {self.pair} after fees: {quantity}", to_console=True)
+                    return
+
+                # ✅ Opslaan van de nieuwe positie in de portfolio
+                new_position = {
+                    "price": real_buy_price,
+                    "quantity": quantity,
+                    "timestamp": datetime.now().isoformat()
+                }
+
+                self.portfolio[self.pair] = new_position
+                self.save_portfolio()
+
+                # ✅ Log de koop inclusief echte fees
+                self.log_trade("buy", real_buy_price, quantity, fee=buy_fee)
+
+                self.logger.log(
+                    f"[{self.bot_name}] 👽 Bought {self.pair}: Price={
+                        real_buy_price:.2f}, Quantity={quantity:.6f}, Fee={buy_fee:.2f}",
+                    to_console=True
+                )
+            else:
+                self.logger.log(
+                    f"[{self.bot_name}] ⚠️ Order failed for {self.pair}: {
+                        json.dumps(order_response, indent=4)}",
+                    to_console=True
+                )
+
+        except Exception as e:
+            self.logger.log(
+                f"[{self.bot_name}] 👽❌ Error executing buy order: {str(e)} | Response: {json.dumps(
+                    order_response, indent=4) if order_response else 'No response received'}",
+                to_console=True
+            )
 
     def sell(self, fee_percentage):
         """Execute a sell order and remove only the sold asset from the portfolio."""
