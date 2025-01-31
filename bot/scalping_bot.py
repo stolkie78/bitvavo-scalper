@@ -88,16 +88,13 @@ class ScalpingBot:
                         if rsi >= self.config["SELL_THRESHOLD"]:
                             if self.state_managers[pair].has_position():
                                 profit = self.state_managers[pair].calculate_profit(
-                                    current_price, self.config["TRADE_FEE_PERCENTAGE"]
+                                    current_price
                                 )
                                 if profit >= self.config["MINIMUM_PROFIT_PERCENTAGE"]:
                                     self.log_message(
                                         f"🔴 Selling {pair}. Current RSI={rsi:.2f}, Price: {current_price:.2f}, Profit={profit:.2f}%", to_slack=True
                                     )
-                                    self.state_managers[pair].sell(
-                                        current_price,
-                                        self.config["TRADE_FEE_PERCENTAGE"]
-                                    )
+                                    self.state_managers[pair].sell(current_price)
                                 else:
                                     self.log_message(
                                         f"⚠️ Skipping sell for {pair}: Profit {
@@ -113,8 +110,7 @@ class ScalpingBot:
                                 )
                                 self.state_managers[pair].buy(
                                     current_price,
-                                    self.pair_budgets[pair],
-                                    self.config["TRADE_FEE_PERCENTAGE"]
+                                    self.pair_budgets[pair]
                                 )
 
                     # Update price history
@@ -152,8 +148,17 @@ if __name__ == "__main__":
     bitvavo = bitvavo(ConfigLoader.load_config("bitvavo.json"))
     config = ConfigLoader.load_config(config_path)
     logger = LoggingFacility(ConfigLoader.load_config("slack.json"))
-    state_managers = {pair: StateManager(pair, logger, bitvavo, demo_mode=config.get(
-        "DEMO_MODE", False)) for pair in config["PAIRS"]}
+
+    state_managers = {
+        pair: StateManager(
+            pair,
+            logger,
+            bitvavo,
+            config.get("DEMO_MODE", False),
+            args.bot_name
+        )
+        for pair in config["PAIRS"]
+    }
 
     bot = ScalpingBot(config, logger, state_managers, bitvavo, args)
     bot.run()
