@@ -1,6 +1,7 @@
 import json
-from datetime import datetime
 import os
+import asyncio
+from datetime import datetime
 from bot.trading_utils import TradingUtils
 import threading
 
@@ -13,213 +14,162 @@ class StateManager:
         self.logger = logger
         self.bitvavo = bitvavo
         self.demo_mode = demo_mode
-        self.position = None  # Ensure only one position per crypto
+        self.position = None  # Zorgt ervoor dat er maar 1 positie per crypto is
         self.data_dir = "data"
         self.portfolio_file = os.path.join(self.data_dir, "portfolio.json")
         self.trades_file = os.path.join(self.data_dir, "trades.json")
         self.portfolio = self.load_portfolio()
 
-        # Ensure the data directory exists
+        # Zorg dat de map bestaat
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
 
-        # Restore position if it exists in the portfolio
+        # Herstel positie als die bestaat
         if self.pair in self.portfolio:
             self.position = self.portfolio[self.pair]
 
-
     def has_position(self):
-        """Check if a position exists for the pair using the latest portfolio state."""
-        self.portfolio = self.load_portfolio()  # ✅ Always load fresh portfolio
-        has_position = self.pair in self.portfolio and self.portfolio[self.pair] is not None
-
-        # 🔍 Debugging Log
-        #self.logger.log(
-        #    f"👽 Checking position for {self.pair}: {'YES' if has_position else 'NO'} "
-        #    f"| Current portfolio: {json.dumps(self.portfolio, indent=4)}",
-        #    to_console=True
-        #)
-        return has_position
-
+        """Controleer of een positie bestaat voor het paar."""
+        self.portfolio = self.load_portfolio()  # ✅ Altijd een up-to-date portfolio ophalen
+        return self.pair in self.portfolio and self.portfolio[self.pair] is not None
 
     def load_portfolio(self):
-        """Load the entire portfolio content from a JSON file."""
+        """Laad de portefeuille-inhoud uit een JSON-bestand."""
         if os.path.exists(self.portfolio_file) and os.path.getsize(self.portfolio_file) > 0:
             try:
                 with open(self.portfolio_file, "r") as f:
-                    # ✅ Assign directly to self.portfolio
                     self.portfolio = json.load(f)
-
-                self.position = self.portfolio.get(
-                    self.pair, None)  # ✅ Restore existing positions
-
-                return self.portfolio  # ✅ Ensure this function always returns the correct portfolio
+                self.position = self.portfolio.get(self.pair, None)
+                return self.portfolio
             except (json.JSONDecodeError, IOError):
                 self.logger.log(
-                    f"👽❗ Error loading portfolio.json, resetting file.", to_console=True)
-                return {}  # Reset if corrupted
-        return {}  # Return empty if file does not exist or is empty
-
+                    "👽❗ Error loading portfolio.json, resetting file.", to_console=True)
+                return {}  # Reset bij fout
+        return {}  # Lege return als bestand niet bestaat
 
     def save_portfolio(self):
-        """Save the portfolio content to a JSON file without keeping old removed positions."""
-        with self._lock:  # Prevent race conditions
+        """Sla de portefeuille-inhoud op naar een JSON-bestand."""
+        with self._lock:
             try:
                 with open(self.portfolio_file, "w") as f:
-                    # ✅ Overwrite with updated data
                     json.dump(self.portfolio, f, indent=4)
-
-                # ✅ Reload the portfolio to confirm changes
                 self.portfolio = self.load_portfolio()
-                self.logger.log(
-                    f"👽 Portfolio successfully updated: {json.dumps(self.portfolio, indent=4)}", to_console=True)
-
+                self.logger.log(f"👽 Portfolio successfully updated: {
+                                json.dumps(self.portfolio, indent=4)}", to_console=True)
             except Exception as e:
-                self.logger.log(f"👽❌ Error saving portfolio: {e}", to_console=True)
+                self.logger.log(f"👽❌ Error saving portfolio: {
+                                e}", to_console=True)
 
-    def adjust_quantity(self, pair, quantity):
-        """Adjust the quantity to meet market requirements."""
-        market_info = self.bitvavo.markets()
-        for market in market_info:
-            if market['market'] == pair:
-                min_amount = float(market.get('minOrderInBaseAsset', 0.0))
-                precision = int(market.get('decimalPlacesBaseAsset', 6))
-                adjusted_quantity = max(min_amount, round(quantity, precision))
-                return adjusted_quantity
-        self.logger.log(f"⚠️ Market info not found for {
-                        pair}. Returning original quantity.", to_console=True)
-        return quantity
-
-
-    def buy(self, price, budget, fee_percentage):
-        """Execute a buy order if no position exists for the pair."""
+    async def buy(self, budget, fee_percentage):
+        """Voer een kooporder uit via WebSocket."""
         if self.has_position():
-            self.logger.log(
-                f"👽❌ Cannot open a new position for {self.pair}. Position already exists.", to_console=True)
+            self.logger.log(f"👽❌ Cannot open a new position for {
+                            self.pair}. Position already exists.", to_console=True)
             return
 
+        # ✅ Haal de live prijs op via WebSockets
+        price = await TradingUtils.fetch_current_price(self.bitvavo, self.pair)
         quantity = (budget / price) * (1 - fee_percentage / 100)
-        quantity = self.adjust_quantity(self.pair, quantity)
 
         if quantity <= 0:
-            self.logger.log(
-                f"👽❌ Invalid quantity for {self.pair}: {quantity}", to_console=True, to_slack=False)
+            self.logger.log(f"👽❌ Invalid quantity for {self.pair}: {
+                            quantity}", to_console=True)
             return
 
-        order = TradingUtils.place_order(
-            self.bitvavo, self.pair, "buy", quantity, demo_mode=self.demo_mode)
+        # ✅ Plaats order via WebSockets
+        order = await TradingUtils.place_order(self.bitvavo, self.pair, "buy", quantity, demo_mode=self.demo_mode)
 
-        if order.get("status") == "demo" or "orderId" in order:
-            new_position = {"price": price, "quantity": quantity,
-                            "timestamp": datetime.now().isoformat()}
+        if order.get("status") == "filled":
+            real_price = order["actual_price"]
+            real_quantity = order["quantity"]
+            buy_fee = order["fee_paid"]
 
-            # ✅ Ensure the portfolio keeps all pairs and updates only the relevant one
+            # ✅ Opslaan van de nieuwe positie
+            new_position = {
+                "price": real_price,
+                "quantity": real_quantity,
+                "timestamp": datetime.now().isoformat()
+            }
             self.portfolio[self.pair] = new_position
             self.save_portfolio()
 
-            self.log_trade("buy", price, quantity)
-            self.logger.log(
-                f"👽 Bought {self.pair}: Price={price:.2f}, Quantity={quantity:.6f}", to_console=True, to_slack=False)
+            self.log_trade("buy", real_price, real_quantity, fee=buy_fee)
+            self.logger.log(f"👽 Bought {self.pair}: Price={real_price:.2f}, Quantity={
+                            real_quantity:.6f}, Fee={buy_fee:.2f}", to_console=True)
         else:
-            self.logger.log(
-                f"👽 Failed to execute buy order for {self.pair}: {order}", to_console=True, to_slack=False)
+            self.logger.log(f"👽 Failed to execute buy order for {
+                            self.pair}: {order}", to_console=True)
 
-
-    def sell(self, price, fee_percentage):
-        """Execute a sell order and remove only the sold asset from the portfolio."""
+    async def sell(self, fee_percentage):
+        """Voer een verkooporder uit via WebSockets."""
         if not self.has_position():
-            self.logger.log(
-                f"👽 No position to sell for {self.pair}.", to_console=True)
+            self.logger.log(f"👽 No position to sell for {
+                            self.pair}.", to_console=True)
             return
 
-        if self.position is None:  # Extra check to prevent NoneType errors
-            self.logger.log(
-                f"👽❌ Sell failed: No valid position found for {self.pair}.", to_console=True)
+        if self.position is None:
+            self.logger.log(f"👽❌ Sell failed: No valid position found for {
+                            self.pair}.", to_console=True)
             return
 
+        # ✅ Live prijs ophalen via WebSockets
+        price = await TradingUtils.fetch_current_price(self.bitvavo, self.pair)
         quantity = self.position.get("quantity", 0)
-        quantity = self.adjust_quantity(self.pair, quantity)
 
         if quantity <= 0:
-            self.logger.log(
-                f"👽 Invalid quantity for {self.pair}: {quantity}", to_console=True, to_slack=False)
+            self.logger.log(f"👽 Invalid quantity for {self.pair}: {
+                            quantity}", to_console=True)
             return
 
         cost_basis = self.position["price"] * quantity
         revenue = price * quantity * (1 - fee_percentage / 100)
         profit = revenue - cost_basis
 
-        order = TradingUtils.place_order(
-            self.bitvavo, self.pair, "sell", quantity, demo_mode=self.demo_mode)
+        # ✅ Plaats verkooporder via WebSockets
+        order = await TradingUtils.place_order(self.bitvavo, self.pair, "sell", quantity, demo_mode=self.demo_mode)
 
-        if order.get("status") == "demo" or "orderId" in order:
-            self.log_trade("sell", price, quantity, profit)
+        if order.get("status") == "filled":
+            real_price = order["actual_price"]
+            real_quantity = order["quantity"]
+            sell_fee = order["fee_paid"]
 
-            # 🔍 Debugging: Log before removal
-            # self.logger.log(
-            #     f"👽 BEFORE removal: Portfolio contains {json.dumps(self.portfolio, indent=4)}", to_console=True)
+            self.log_trade("sell", real_price, real_quantity,
+                           profit, fee=sell_fee)
 
-            # ✅ Properly Remove the Pair
             if self.pair in self.portfolio:
-                del self.portfolio[self.pair]  # ✅ Remove from dictionary
-                self.save_portfolio()  # ✅ Save changes immediately
+                del self.portfolio[self.pair]  # ✅ Verwijder uit portefeuille
+                self.save_portfolio()  # ✅ Sla wijzigingen op
 
-                # ✅ Reload to confirm removal
-                self.portfolio = self.load_portfolio()
-
-                self.logger.log(
-                    f"👽 Sold {self.pair}, removing from portfolio.", to_console=True)
-
-            # 🔍 Debugging: Log after removal
-            # self.logger.log(
-            #    f"👽 AFTER removal: Portfolio contains {json.dumps(self.portfolio, indent=4)}", to_console=True)
-
-            self.logger.log(
-                f"👽 Sold {self.pair}: Price={price:.2f}, Profit={profit:.2f}", to_console=True, to_slack=False)
+            self.logger.log(f"👽 Sold {self.pair}: Price={real_price:.2f}, Profit={
+                            profit:.2f}, Fee={sell_fee:.2f}", to_console=True)
         else:
-            self.logger.log(
-                f"👽 Failed to execute sell order for {self.pair}: {order}", to_console=True, to_slack=False)
+            self.logger.log(f"👽 Failed to execute sell order for {
+                            self.pair}: {order}", to_console=True)
 
-
-    def calculate_profit(self, current_price, fee_percentage):
-        """
-        Calculate the profit or loss for the current position.
-
-        Args:
-            current_price (float): The current market price of the asset.
-            fee_percentage (float): The trading fee percentage.
-
-        Returns:
-            float or None: The profit or loss as a percentage of the initial investment, or None if no position exists.
-        """
+    async def calculate_profit(self, fee_percentage):
+        """Bereken de winst of verlies voor de huidige positie."""
         if not self.has_position():
-            self.logger.log(
-                f"⚠️ No active position for {self.pair}. Skipping profit calculation.", to_console=True)
-            return None  # Voorkomt crash als er geen positie is
+            self.logger.log(f"⚠️ No active position for {
+                            self.pair}. Skipping profit calculation.", to_console=True)
+            return None
 
-        quantity = self.portfolio[self.pair]["quantity"]
-        cost_basis = self.portfolio[self.pair]["price"] * quantity
-        revenue = current_price * quantity * (1 - fee_percentage / 100)
+        price = await TradingUtils.fetch_current_price(self.bitvavo, self.pair)
+        quantity = self.position["quantity"]
+        cost_basis = self.position["price"] * quantity
+        revenue = price * quantity * (1 - fee_percentage / 100)
         profit = revenue - cost_basis
 
-        return (profit / cost_basis) * 100  # Return profit als percentage
+        return (profit / cost_basis) * 100  # Winst in percentage
 
-    def log_trade(self, trade_type, price, quantity, profit=None):
-        """
-        Log trade details to a JSON file.
-
-        Args:
-            trade_type (str): "buy" or "sell".
-            price (float): Trade price.
-            quantity (float): Quantity traded.
-            profit (float, optional): Profit from the trade.
-        """
+    def log_trade(self, trade_type, price, quantity, profit=None, fee=None):
+        """Log trades naar een JSON-bestand."""
         trade = {
             "pair": self.pair,
             "type": trade_type,
             "price": price,
             "quantity": quantity,
             "profit": profit,
+            "fee": fee,
             "timestamp": datetime.now().isoformat()
         }
         try:
@@ -233,5 +183,4 @@ class StateManager:
                 with open(self.trades_file, "w") as f:
                     json.dump(trades, f, indent=4)
         except Exception as e:
-            self.logger.log(f"👽❗ Error logging trade: {
-                            e}", to_console=True, to_slack=False)
+            self.logger.log(f"👽❗ Error logging trade: {e}", to_console=True)
