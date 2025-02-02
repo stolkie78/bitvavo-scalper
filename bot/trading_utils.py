@@ -128,6 +128,11 @@ class TradingUtils:
             try:
                 print(f"📡 Fetching last {action} order for {pair} from Bitvavo (Attempt {attempt + 1}/{max_retries})...")
 
+                print("📡 Testing API Authentication...")
+                account_info = bitvavo.account()
+                print(json.dumps(account_info, indent=4))
+
+
                 # ✅ Haal de laatste 5 orders op, filter op 'buy' of 'sell'
                 orders = bitvavo.getOrders({
                     "market": pair,
