@@ -4,8 +4,8 @@ import time
 from bitvavo.Bitvavo import Bitvavo
 
 # ✅ Vul hier je API-sleutels in of laad ze uit een beveiligde omgeving
-API_KEY="13bad32c39e26e1b9f004b00a6d3fa5496299b020c972a404a5819c6ed4e63be"
-API_SECRET="2627eabbf0df8d75f0f90a9f2281297ececcbd49bb1b787f47f71759a34e3dc89466d01c6861f37b1243e35aacfce87323c224e885efb2af027262dc912eeef0"
+API_KEY=""
+API_SECRET=""
 
 bitvavo = Bitvavo({
     "APIKEY": API_KEY,
